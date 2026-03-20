@@ -1,0 +1,8 @@
+services:
+  ha-agent:
+    build: .
+    container_name: ha-agent
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
