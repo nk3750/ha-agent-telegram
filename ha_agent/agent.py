@@ -1,3 +1,4 @@
+import logging
 import operator
 from typing import Annotated, Literal
 
@@ -10,48 +11,26 @@ from ha_agent.config import ANTHROPIC_API_KEY
 from ha_agent.tools import all_tools
 from ha_agent.memory import format_memories_for_prompt
 
+logger = logging.getLogger(__name__)
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
 
 
-SYSTEM_PROMPT = """You are a smart home assistant with full control over Home Assistant. \
-You're friendly, casual, and to the point — like a knowledgeable roommate who happens to control the house. \
-Use contractions, keep it short, and don't be robotic. Confirm what you did, add useful context when relevant.
+# Tool descriptions live in tool schemas (bind_tools) — don't duplicate here.
+SYSTEM_PROMPT = """\
+You are a smart home assistant controlling Home Assistant. \
+Friendly, casual, brief — like a knowledgeable roommate.
 
-IMPORTANT: You're responding via Telegram. Format your responses using Telegram HTML tags:
-- <b>bold</b> for emphasis
-- <i>italic</i> for secondary info
-- <code>entity_ids</code> for technical references
-Do NOT use markdown (no **, no ##, no ```). Keep formatting light — most responses need no formatting at all.
+Respond via Telegram using HTML only: <b>bold</b>, <i>italic</i>, <code>entity_ids</code>. No markdown.
 
-Your tools:
+Entity IDs: domain.name (e.g. light.living_room, climate.bedroom).
+When unsure of an entity_id, use get_all_entities. When unsure of services, use get_services.
+For "do X when Y" → watch_and_act. For "do X in N minutes" → schedule_service.
+Proactively save_memory when you learn useful facts."""
 
-Immediate actions:
-- call_service: Call ANY HA service (turn on/off, set temperature, trigger automation, lock/unlock, etc.)
-- get_state: Get current state and attributes of an entity
-- get_all_entities: Discover available entities (filter by domain like 'light', 'climate', 'automation')
-- get_services: Discover what services/actions are available for a domain
-- render_template: Run Jinja2 templates for complex queries (counting, averages, conditionals)
-
-Background tasks:
-- schedule_service: Delayed action ("in 5 minutes turn off the lights"). Convert time to seconds.
-- watch_and_act: One-shot conditional trigger ("turn on lights when I get home"). Polls an entity and fires when condition is met, then cleans up.
-- list_active_tasks: Show all running background tasks (schedules + watchers)
-- cancel_task: Cancel a background task by ID
-
-Memory:
-- save_memory: Save a fact about the user or home. Use is_core=True for permanent facts (name, timezone, household).
-- forget_memory: Remove an outdated memory.
-
-Entity IDs follow the pattern: domain.name (e.g. light.living_room, climate.bedroom).
-Common domains: light, switch, climate, automation, sensor, binary_sensor, media_player, lock, cover, fan, person.
-
-When you're unsure of an entity_id, use get_all_entities to discover what's available.
-When you're unsure what services a domain supports, use get_services.
-When you learn something useful about the user or their home, proactively save it.
-For "do X when Y happens" requests, use watch_and_act — it's a one-shot watcher, not a persistent automation.
-For "do X in N minutes" requests, use schedule_service."""
+MAX_HISTORY = 20  # max messages sent to the LLM per call
 
 model = ChatAnthropic(
     model="claude-sonnet-4-6",
@@ -63,11 +42,35 @@ tools_by_name = {t.name: t for t in all_tools}
 model_with_tools = model.bind_tools(all_tools)
 
 
+def _trim_history(messages: list, keep: int = MAX_HISTORY) -> list:
+    """Keep last `keep` messages, preserving tool-call/result pairs."""
+    if len(messages) <= keep:
+        return messages
+    trimmed = messages[-keep:]
+    # Don't start on a ToolMessage — walk back to include its AIMessage
+    while trimmed and isinstance(trimmed[0], ToolMessage):
+        cut_idx = len(messages) - len(trimmed) - 1
+        if cut_idx >= 0:
+            trimmed.insert(0, messages[cut_idx])
+        else:
+            break
+    return trimmed
+
+
 def llm_call(state: AgentState) -> dict:
     prompt = SYSTEM_PROMPT + format_memories_for_prompt()
+    messages = _trim_history(state["messages"])
     response = model_with_tools.invoke(
-        [SystemMessage(content=prompt)] + state["messages"]
+        [SystemMessage(content=prompt)] + messages
     )
+    usage = response.response_metadata.get("usage", {})
+    if usage:
+        logger.info(
+            "Tokens — in: %s, out: %s, cache_read: %s",
+            usage.get("input_tokens", "?"),
+            usage.get("output_tokens", "?"),
+            usage.get("cache_read_input_tokens", 0),
+        )
     return {"messages": [response]}
 
 
@@ -118,7 +121,7 @@ def main():
 
         messages.append(HumanMessage(content=user_input))
         result = graph.invoke({"messages": messages})
-        messages = result["messages"]
+        messages = result["messages"][-40:]
 
         print(f"\nAgent: {messages[-1].content}")
 

@@ -48,7 +48,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _current_chat_id.set(chat_id)
 
     result = await asyncio.to_thread(graph.invoke, {"messages": messages})
-    _chat_histories[chat_id] = result["messages"]
+    # Keep last 40 messages in storage to prevent memory leak
+    _chat_histories[chat_id] = result["messages"][-40:]
 
     response = result["messages"][-1].content
     try:

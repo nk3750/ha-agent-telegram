@@ -67,17 +67,13 @@ def _state_matches(current: str, target: str) -> bool:
 
 @tool
 def call_service(domain: str, service: str, entity_id: str = "", data: str = "{}") -> str:
-    """Call any Home Assistant service. This is the primary tool for controlling devices.
+    """Call a Home Assistant service to control devices.
 
     Args:
-        domain: The service domain, e.g. 'light', 'switch', 'climate', 'automation',
-                'media_player', 'lock', 'cover', 'fan', 'homeassistant'.
-        service: The service to call, e.g. 'turn_on', 'turn_off', 'toggle',
-                 'set_temperature', 'trigger', 'lock', 'unlock', 'open_cover', 'close_cover'.
-        entity_id: The target entity, e.g. 'light.living_room', 'climate.bedroom'.
-                   Leave empty for services that don't need an entity.
-        data: JSON string of additional service data, e.g. '{"brightness": 200}' or
-              '{"temperature": 72}'. Defaults to '{}'.
+        domain: Service domain (e.g. 'light', 'switch', 'climate').
+        service: Service name (e.g. 'turn_on', 'turn_off', 'toggle').
+        entity_id: Target entity. Empty if not needed.
+        data: JSON service data. Defaults to '{}'.
     """
     try:
         parsed_data = json.loads(data) if data and data != "{}" else None
@@ -90,11 +86,10 @@ def call_service(domain: str, service: str, entity_id: str = "", data: str = "{}
 
 @tool
 def get_state(entity_id: str) -> str:
-    """Get the current state and attributes of a Home Assistant entity.
+    """Get current state and attributes of an entity.
 
     Args:
-        entity_id: The entity to query, e.g. 'light.living_room', 'climate.bedroom',
-                   'sensor.temperature', 'automation.morning_routine'.
+        entity_id: Entity to query (e.g. 'light.living_room').
     """
     try:
         state = ha.get_state(entity_id)
@@ -106,9 +101,12 @@ def get_state(entity_id: str) -> str:
         ]
         if attrs.get("friendly_name"):
             lines.insert(1, f"Name: {attrs['friendly_name']}")
-        for key, val in attrs.items():
-            if key != "friendly_name":
-                lines.append(f"  {key}: {val}")
+        # Cap attributes to avoid bloating context
+        attr_items = [(k, v) for k, v in attrs.items() if k != "friendly_name"]
+        for key, val in attr_items[:10]:
+            lines.append(f"  {key}: {val}")
+        if len(attr_items) > 10:
+            lines.append(f"  ... and {len(attr_items) - 10} more attributes")
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting state of {entity_id}: {e}"
@@ -116,12 +114,10 @@ def get_state(entity_id: str) -> str:
 
 @tool
 def get_all_entities(domain_filter: str = "") -> str:
-    """List all Home Assistant entities, optionally filtered by domain.
-    Use this to discover available devices and their entity IDs.
+    """List entities, optionally filtered by domain. Use domain_filter to narrow results.
 
     Args:
-        domain_filter: Optional domain to filter by, e.g. 'light', 'climate', 'automation',
-                       'switch', 'sensor'. Leave empty for all entities.
+        domain_filter: Domain to filter by (e.g. 'light', 'climate'). Empty for all.
     """
     try:
         states = ha.get_all_states()
@@ -131,19 +127,22 @@ def get_all_entities(domain_filter: str = "") -> str:
         for s in states:
             name = s.get("attributes", {}).get("friendly_name", "")
             lines.append(f"  {s['entity_id']} ({s['state']}){f' — {name}' if name else ''}")
-        return f"Found {len(lines)} entities:\n" + "\n".join(lines)
+        total = len(lines)
+        # Cap output to avoid blowing up context
+        if total > 50:
+            lines = lines[:50]
+            return f"Found {total} entities (showing first 50 — use domain_filter to narrow):\n" + "\n".join(lines)
+        return f"Found {total} entities:\n" + "\n".join(lines)
     except Exception as e:
         return f"Error listing entities: {e}"
 
 
 @tool
 def get_services(domain: str = "") -> str:
-    """List available Home Assistant services, optionally filtered by domain.
-    Use this to discover what actions can be performed on devices.
+    """List available services for a domain.
 
     Args:
-        domain: Optional domain to filter by, e.g. 'light', 'climate', 'media_player'.
-                Leave empty to list all domains and their service counts.
+        domain: Domain to filter (e.g. 'light', 'climate'). Empty for all domains.
     """
     try:
         services = ha.get_services()
@@ -164,13 +163,10 @@ def get_services(domain: str = "") -> str:
 
 @tool
 def render_template(template: str) -> str:
-    """Render a Home Assistant Jinja2 template. Useful for complex queries like
-    counting entities in a state, computing averages, or conditional logic.
+    """Render a Jinja2 template in Home Assistant for complex queries.
 
     Args:
-        template: A Jinja2 template string, e.g.
-                  '{{ states.light | selectattr("state", "eq", "on") | list | count }}'
-                  or '{{ state_attr("climate.bedroom", "current_temperature") }}'.
+        template: Jinja2 template string.
     """
     try:
         return ha.render_template(template)
@@ -182,16 +178,14 @@ def render_template(template: str) -> str:
 
 @tool
 def schedule_service(delay_seconds: int, domain: str, service: str, entity_id: str = "", data: str = "{}") -> str:
-    """Schedule a Home Assistant service call to execute after a delay.
-    Use this when the user says things like "in 5 minutes turn on the lights"
-    or "turn off the TV in 30 seconds".
+    """Schedule a service call after a delay. Convert minutes to seconds.
 
     Args:
-        delay_seconds: How many seconds to wait before executing. Convert minutes to seconds (e.g. 3 minutes = 180).
-        domain: The service domain, e.g. 'light', 'climate', 'automation'.
-        service: The service to call, e.g. 'turn_on', 'turn_off', 'set_temperature'.
-        entity_id: The target entity, e.g. 'light.living_room'.
-        data: JSON string of additional service data. Defaults to '{}'.
+        delay_seconds: Seconds to wait (e.g. 300 for 5 minutes).
+        domain: Service domain.
+        service: Service name.
+        entity_id: Target entity.
+        data: JSON service data. Defaults to '{}'.
     """
     try:
         parsed_data = json.loads(data) if data and data != "{}" else None
@@ -235,22 +229,17 @@ def watch_and_act(
     poll_interval_seconds: int = 5,
     timeout_minutes: int = 60,
 ) -> str:
-    """Watch a Home Assistant entity and trigger a service call when it reaches a target state.
-    This is a one-shot watcher — it fires once and cleans up. Not a persistent automation.
-
-    Use this when the user says things like "turn on the lights when I get home",
-    "start the heater when temperature drops below 60", or "lock the door when the sun sets".
+    """Watch an entity and fire a one-shot service call when it reaches a target state.
 
     Args:
-        watch_entity: The entity to monitor, e.g. 'person.neelabh', 'sensor.temperature', 'sun.sun'.
-        target_state: The state value to wait for, e.g. 'home', 'below_horizon', 'on'.
-                      For numeric sensors, use the number as a string (e.g. '60').
-        then_domain: Service domain to call when condition is met, e.g. 'light', 'climate'.
-        then_service: Service to call, e.g. 'turn_on', 'set_temperature'.
-        then_entity: Target entity for the action, e.g. 'light.living_room'.
-        then_data: JSON string of additional service data. Defaults to '{}'.
-        poll_interval_seconds: How often to check state in seconds. Defaults to 5.
-        timeout_minutes: Give up after this many minutes. Defaults to 60.
+        watch_entity: Entity to monitor.
+        target_state: State to wait for (e.g. 'home', 'below_horizon', '60').
+        then_domain: Service domain to call when matched.
+        then_service: Service to call.
+        then_entity: Target entity for the action.
+        then_data: JSON service data. Defaults to '{}'.
+        poll_interval_seconds: Check interval in seconds. Defaults to 5.
+        timeout_minutes: Give up after N minutes. Defaults to 60.
     """
     try:
         parsed_data = json.loads(then_data) if then_data and then_data != "{}" else None
@@ -329,9 +318,7 @@ def watch_and_act(
 
 @tool
 def list_active_tasks() -> str:
-    """List all active background tasks (scheduled actions and watchers).
-    Use this when the user asks what's running in the background, what's pending, etc.
-    """
+    """List all active background tasks (schedules and watchers)."""
     with _task_lock:
         if not _active_tasks:
             return "No active background tasks."
@@ -346,11 +333,10 @@ def list_active_tasks() -> str:
 
 @tool
 def cancel_task(task_id: int) -> str:
-    """Cancel an active background task by its ID.
-    Use list_active_tasks first to see available task IDs.
+    """Cancel a background task by ID.
 
     Args:
-        task_id: The ID of the task to cancel (e.g. 1, 2, 3).
+        task_id: Task ID to cancel.
     """
     with _task_lock:
         if task_id in _active_tasks:
@@ -363,34 +349,21 @@ def cancel_task(task_id: int) -> str:
 
 @tool
 def save_memory(fact: str, is_core: bool = False) -> str:
-    """Save a fact about the user or their home to persistent memory.
-    Use this proactively when you learn something useful that will help in future conversations.
-
-    Save as CORE (is_core=True) for facts that rarely change:
-    - User's name, timezone, household members
-    - Which person entity maps to which family member
-    - Preferred temperature units (F vs C)
-    - Pet names, routines, preferences
-
-    Save as LEARNED (is_core=False) for everything else:
-    - Device quirks ("bedroom light entity is light.bedroom_2")
-    - Integrations ("user's car is Tesla, accessible via device_tracker.tesla")
-    - Preferences that might change ("user likes lights at 80% brightness")
+    """Save a fact about the user or home. Core=permanent (name, timezone), learned=general.
 
     Args:
-        fact: The fact to remember. Be concise but specific.
-        is_core: True for permanent facts (name, timezone, etc.), False for general learned facts.
+        fact: Concise fact to remember.
+        is_core: True for permanent facts, False for general.
     """
     return memory.add_memory(fact, is_core=is_core)
 
 
 @tool
 def forget_memory(fact: str) -> str:
-    """Forget a previously saved memory. Use when the user says something is no longer true
-    or asks you to forget something.
+    """Remove a saved memory.
 
     Args:
-        fact: The fact to forget. Must match an existing memory exactly.
+        fact: Exact fact to forget.
     """
     return memory.forget_memory(fact)
 

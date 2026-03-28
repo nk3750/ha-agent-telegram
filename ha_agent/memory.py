@@ -4,8 +4,8 @@ import threading
 from datetime import datetime
 
 MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memories.json")
-CORE_CAP = 20
-LEARNED_CAP = 50
+CORE_CAP = 10
+LEARNED_CAP = 20
 
 _lock = threading.Lock()
 
